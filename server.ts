@@ -17,7 +17,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Shared Gemini client utility
-const apiKey = process.env.GEMINI_API_KEY || '';
+const apiKey = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6KvX4XseCtOF8JvkEx9v0uCFPzPhWyo0l38bGQC7H0E-Q';
 const ai = new GoogleGenAI({
   apiKey,
   httpOptions: {
@@ -762,3 +762,4 @@ async function startServer() {
 }
 
 startServer();
+export default app;
