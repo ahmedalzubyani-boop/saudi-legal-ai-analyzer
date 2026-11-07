@@ -3,7 +3,10 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { generateSaudiLegalAnalysisFallback } from './src/utils/fallbackLegalAnalyzer.ts';
+import {
+  generateSaudiLegalAnalysisFallback,
+  generateIntelligentJudicialAdvisorReply,
+} from './src/utils/fallbackLegalAnalyzer.ts';
 
 dotenv.config();
 
@@ -16,8 +19,17 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Shared Gemini client utility
-const apiKey = process.env.GEMINI_API_KEY || '';
+// Support multi-provider and common deployment env variable keys
+const apiKey =
+  process.env.GEMINI_API_KEY ||
+  process.env.GOOGLE_API_KEY ||
+  process.env.GOOGLE_GENAI_API_KEY ||
+  process.env.VITE_GEMINI_API_KEY ||
+  '';
+
+// Track quota exhaustion for free-tier 20 RPD limit on gemini-3.8-flash
+let is38QuotaExhausted = false;
+
 const ai = new GoogleGenAI({
   apiKey: apiKey || 'dummy-fallback-key',
   httpOptions: {
@@ -81,7 +93,11 @@ async function generateContentWithRetry(options: {
     throw new Error('GEMINI_API_KEY is not configured, using legal analyzer fallback');
   }
 
-  const primaryModel = options.preferredModel || 'gemini-3.8-flash';
+  // If 3.8 Flash previously exhausted its 20 RPD free tier quota, route directly to 3.1 Flash Lite (1500 RPD)
+  let primaryModel = options.preferredModel || 'gemini-3.8-flash';
+  if (is38QuotaExhausted && primaryModel === 'gemini-3.8-flash') {
+    primaryModel = 'gemini-3.1-flash-lite';
+  }
 
   const callModel = async (model: string): Promise<string> => {
     const config: any = {
@@ -109,7 +125,7 @@ async function generateContentWithRetry(options: {
     throw new Error(`Empty response from ${model}`);
   };
 
-  // If client specifically requested lite/fast model
+  // If client specifically requested lite/fast model or quota exhausted
   if (primaryModel === 'gemini-3.1-flash-lite') {
     return await callModel('gemini-3.1-flash-lite');
   }
@@ -146,8 +162,16 @@ async function generateContentWithRetry(options: {
         }
       })
       .catch((primaryErr) => {
-        console.log(`[Judicial AI] Primary model ${primaryModel} encounter:`, primaryErr?.message || primaryErr);
-        // If primary failed immediately, run fast backup immediately without waiting
+        const errMsg = primaryErr?.message || String(primaryErr);
+        console.log(`[Judicial AI] Primary model ${primaryModel} encounter:`, errMsg);
+
+        // Detect 429 quota exhaustion on free tier (20 RPD)
+        if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+          console.log('[Judicial AI] Detected free-tier quota exhaustion for gemini-3.8-flash. Switching to high-quota gemini-3.1-flash-lite.');
+          is38QuotaExhausted = true;
+        }
+
+        // Run fast high-quota backup immediately without waiting
         callModel('gemini-3.1-flash-lite')
           .then((backupText) => {
             if (!isSettled) {
@@ -165,7 +189,7 @@ async function generateContentWithRetry(options: {
           });
       });
 
-    // 2. Hedged Request: After 20 seconds, if primary has not finished, start gemini-3.1-flash-lite concurrently
+    // 2. Hedged Request: After 15 seconds, if primary has not finished, start gemini-3.1-flash-lite concurrently
     hedgeTimer = setTimeout(() => {
       if (!isSettled) {
         console.log(`[Judicial AI] Launching hedged fast completion via gemini-3.1-flash-lite...`);
@@ -181,12 +205,15 @@ async function generateContentWithRetry(options: {
             console.log(`[Judicial AI] Hedged attempt completed:`, hedgeErr?.message || hedgeErr);
           });
       }
-    }, 20000);
+    }, 15000);
   });
 }
 
+// Dedicated API Router to seamlessly support both /api/* and /* paths across Vercel, Docker, and dev server
+const apiRouter = express.Router();
+
 // Endpoint: Analyze Document (Police report, Public Prosecution, Court Deed)
-app.post('/api/analyze', async (req, res) => {
+apiRouter.post('/analyze', async (req, res) => {
   try {
     const { documentText, documentType, imageBase64, fileBase64, mimeType, fileName, caseFocus } = req.body;
     const rawData = fileBase64 || imageBase64;
@@ -370,7 +397,7 @@ ${documentText || '[مرفق ملف صك الحكم بصيغة PDF أو صورة
 });
 
 // Endpoint: Multi-Turn Judicial Chatbot with conversation history & personas
-app.post('/api/chat', async (req, res) => {
+apiRouter.post('/chat', async (req, res) => {
   try {
     const { messages, roleId, modelChoice, caseContext } = req.body;
 
@@ -453,9 +480,9 @@ ${SYSTEM_INSTRUCTION}
 
       return res.json({ success: true, reply: replyText });
     } catch (modelErr) {
-      console.log('[Judicial AI] Chat model encounter, providing intelligent judicial reply fallback:', modelErr);
+      console.log('[Judicial AI] Chat model encounter, generating deep judicial reply via advisor engine:', modelErr);
       const lastUserMsg = messages[messages.length - 1]?.text || '';
-      const fallbackReply = `بناءً على نصوص الأنظمة العدلية بالمملكة العربية السعودية ووقائع القضية المعروضة:\n\nفيما يخص استفساركم حول: "${lastUserMsg.slice(0, 60)}..."\n\n1. التكييف النظامي: تخضع هذه المسألة لأحكام نظام الإجراءات الجزائية (ولا سيما المادتين 30 و35 بشأن ضوابط القبض والتفتيش ووجوب إرسال المحضر للمحقق خلال 24 ساعة)، وأحكام نظام الإثبات (الصادر بالمرسوم الملكي م/43 في ضوابط حجية الإقرار والأدلة الرقمية).\n2. الأثر الإجرائي: يُوصى بالتمسك بالدفع الشكلي ببطلان الإجراء حال تخلف شروط التلبس أو تجاوز المدد النظامية، والدفع موضوعياً بانتفاء القصد الجنائي لعدم كفاية بينات الاتهام.\n\nتنبيه: هذا الرأي استرشادي لأغراض المدارسة القضائية ولا يحل محل المحامي المرخص.`;
+      const fallbackReply = generateIntelligentJudicialAdvisorReply(lastUserMsg, roleId || 'general', caseContext);
       return res.json({ success: true, reply: fallbackReply });
     }
   } catch (err: any) {
@@ -464,8 +491,8 @@ ${SYSTEM_INSTRUCTION}
   }
 });
 
-// Endpoint: Legacy Consult endpoint
-app.post('/api/consult', async (req, res) => {
+// Endpoint: Judicial Consult endpoint
+apiRouter.post('/consult', async (req, res) => {
   try {
     const { question, caseContext } = req.body;
 
@@ -497,9 +524,10 @@ ${typeof caseContext === 'string' ? caseContext : JSON.stringify(caseContext, nu
       });
       return res.json({ success: true, answer: reply });
     } catch {
+      const fallbackAnswer = generateIntelligentJudicialAdvisorReply(question, 'general', caseContext);
       return res.json({
         success: true,
-        answer: `طبقاً لنظام الإجراءات الجزائية ونظام الإثبات بالمملكة العربية السعودية، يستند هذا الإجراء للمواد (30، 35، 40) حيث يلزم لصحة التفتيش توافر حالة التلبس أو إذن مسبب من النيابة، كما أن تجاوز مدة 24 ساعة يوجب بطلان التوقيف.`,
+        answer: fallbackAnswer,
       });
     }
   } catch (err: any) {
@@ -511,7 +539,7 @@ ${typeof caseContext === 'string' ? caseContext : JSON.stringify(caseContext, nu
 });
 
 // Endpoint: Generate Official Judicial Memorandum (صياغة مذكرة جوابية أو دفوع نظامية)
-app.post('/api/draft-memorandum', async (req, res) => {
+apiRouter.post('/draft-memorandum', async (req, res) => {
   try {
     const { caseContext, memorandumType, clientRole, specificRequests } = req.body;
 
@@ -593,7 +621,7 @@ ${typeof caseContext === 'string' ? caseContext : JSON.stringify(caseContext, nu
 });
 
 // Endpoint: Generate Appellate Brief (لائحة اعتراضية استئنافية على صك الحكم)
-app.post('/api/generate-appeal-memorandum', async (req, res) => {
+apiRouter.post('/generate-appeal-memorandum', async (req, res) => {
   try {
     const { detailedDeed, appellantRole, focusDefects } = req.body;
 
@@ -681,7 +709,7 @@ app.post('/api/generate-appeal-memorandum', async (req, res) => {
 });
 
 // Quick statutory reference articles for client lookup
-app.get('/api/statutes', (_req, res) => {
+apiRouter.get('/statutes', (_req, res) => {
   res.json({
     success: true,
     statutes: [
@@ -741,6 +769,10 @@ app.get('/api/statutes', (_req, res) => {
     ]
   });
 });
+
+// Mount API router on both '/api' and '/' to guarantee 100% matching on Vercel, Node, and containers
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
 
 // Setup Vite middlewares in development, serve static build in production
 async function startServer() {

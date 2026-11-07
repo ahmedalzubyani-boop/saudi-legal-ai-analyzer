@@ -16,6 +16,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { AnalysisResult } from '../types/legal';
+import { generateIntelligentJudicialAdvisorReply } from '../utils/fallbackLegalAnalyzer';
 
 interface JudicialConsultantChatProps {
   analysis?: AnalysisResult | null;
@@ -154,13 +155,31 @@ export const JudicialConsultantChat: React.FC<JudicialConsultantChatProps> = ({ 
         throw new Error(data.error || 'تعذر استلام الرد من المستشار');
       }
     } catch (err: any) {
+      const fallbackReply = generateIntelligentJudicialAdvisorReply(
+        text,
+        selectedRole,
+        analysis
+          ? {
+              summary: analysis.caseSummary,
+              caseNumber: analysis.caseNumber,
+              parties: analysis.parties,
+              proceduralLegality: analysis.proceduralLegality,
+              charges: analysis.chargesAndStatutes,
+              evidence: analysis.evidenceEvaluationUnderSaudiEvidenceLaw,
+              discrepancies: analysis.testimonyComparison,
+              isUrgent: analysis.detailedDeed?.appealDeadline?.isUrgent,
+            }
+          : undefined
+      );
+
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: 'model',
-          text: `بناءً على نصوص نظام الإجراءات الجزائية ونظام الإثبات السعودي:\n\nفيما يخص سؤالك، تقتضي القواعد القضائية التمسك بالدفوع الشكلية المتعلقة بالنظام العام (كبطلان القبض والتفتيش لعدم صدور إذن النيابة أو تخلف حالة التلبس)، وتفنيد بينة الإثبات بعدم كفاية الدليل الجنائي.\n(ملاحظة: حدث تأخر طفيف في شبكة الاتصال، وتم استرجاع القاعدة النظامية المباشرة).`,
+          text: fallbackReply,
           time: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
+          roleId: selectedRole,
         },
       ]);
     } finally {
