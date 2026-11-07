@@ -31,6 +31,9 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState<string | null>(null);
+  const [extractedText, setExtractedText] = useState<string>('');
+  const [pastedText, setPastedText] = useState<string>('');
+  const [inputTab, setInputTab] = useState<'upload' | 'paste'>('upload');
   const [progressStage, setProgressStage] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [dragActive, setDragActive] = useState<boolean>(false);
@@ -86,6 +89,21 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
       setFileBase64(reader.result as string);
     };
     reader.readAsDataURL(file);
+
+    // Extract text in browser from digital PDF
+    const textReader = new FileReader();
+    textReader.onload = () => {
+      try {
+        const raw = textReader.result as string;
+        const arabicMatches = raw.match(/[\u0600-\u06FF\u0750-\u077F0-9/:\-\s]{4,}/g);
+        if (arabicMatches && arabicMatches.length > 3) {
+          setExtractedText(arabicMatches.join(' '));
+        }
+      } catch (e) {
+        console.log('PDF text parsing note:', e);
+      }
+    };
+    textReader.readAsText(file);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -152,6 +170,21 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
   };
 
   const handleStartUpload = () => {
+    if (inputTab === 'paste') {
+      if (!pastedText.trim()) {
+        alert('يرجى كتابة أو لصق نص صك الحكم في المربع المخصص أولاً');
+        return;
+      }
+      simulateUploadAndAnalyze({
+        documentText: pastedText.trim(),
+        documentType: 'صك حكم قضائي ومحضر جلسة',
+        fileName: 'صك_حكم_مدخل_يدوياً.txt',
+        mimeType: 'text/plain',
+        caseFocus: 'استخراج الدائرة والمنطوق والتسبيب ومدد الاعتراض بالاستئناف',
+      });
+      return;
+    }
+
     if (!fileBase64 && !selectedFile) {
       alert('يرجى اختيار ملف PDF لصك الحكم أولاً');
       return;
@@ -159,6 +192,7 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
 
     simulateUploadAndAnalyze({
       fileBase64: fileBase64 || undefined,
+      documentText: extractedText.trim() || pastedText.trim() || undefined,
       documentType: 'صك حكم قضائي ومحضر جلسة',
       fileName: selectedFile?.name || 'صك_حكم_قضائي.pdf',
       mimeType: selectedFile?.type || 'application/pdf',
@@ -180,13 +214,13 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                <span>رفع صك الحكم القضائي (PDF Scanner & OCR)</span>
+                <span>فحص وتفنيد صك الحكم القضائي (PDF & OCR)</span>
                 <span className="text-[11px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full font-semibold">
                   حتى 50 ميغابايت
                 </span>
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                يدعم ملفات صكوك الأحكام الممسوحة ضوئياً والمطبوعة عبر بوابة ناجز والمحاكم السعودية
+                يدعم صكوك المحاكم التجارية، الجزائية، العامة، العمالية، والأحوال الشخصية عبر منصة ناجز
               </p>
             </div>
           </div>
@@ -203,86 +237,135 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
           </button>
         </div>
 
-        {/* Drag & Drop Area */}
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={() => setDragActive(false)}
-          onDrop={handleDrop}
-          className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center transition-all ${
-            dragActive
-              ? 'border-emerald-500 bg-emerald-950/20 scale-[0.99]'
-              : 'border-slate-700 hover:border-slate-600 bg-slate-950/60'
-          }`}
-        >
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-            accept=".pdf,application/pdf"
-            className="hidden"
-          />
+        {/* Input Mode Tabs: Upload PDF vs Paste Text */}
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+          <button
+            type="button"
+            onClick={() => setInputTab('upload')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              inputTab === 'upload'
+                ? 'bg-emerald-700 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+          >
+            <FileUp className="w-3.5 h-3.5 text-amber-300" />
+            <span>رفع ملف صك الحكم (PDF)</span>
+          </button>
 
-          {!selectedFile ? (
-            <div className="space-y-3">
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 flex items-center justify-center shadow-inner">
-                <FileUp className="w-7 h-7" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-bold text-slate-200">
-                  اسحب وأفلت ملف صك الحكم (PDF) هنا، أو اضغط للاستعراض
-                </p>
-                <p className="text-xs text-slate-400">
-                  يدعم صكوك المحاكم التجارية، الجزائية، العامة، العمالية، والأحوال الشخصية الممسوحة ضوئياً
-                </p>
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold border border-slate-700 shadow-sm transition-colors inline-flex items-center gap-2"
-                >
-                  <FileText className="w-4 h-4 text-emerald-400" />
-                  <span>اختيار ملف صك الحكم من جهازك</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-right max-w-xl mx-auto">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-emerald-950 border border-emerald-800/50 text-emerald-400 flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div className="space-y-0.5 overflow-hidden">
-                  <p className="text-xs font-bold text-slate-100 truncate max-w-xs">
-                    {selectedFile.name}
-                  </p>
-                  <p className="text-[11px] text-slate-400 font-mono">
-                    {(selectedFile.size / (1024 * 1024)).toFixed(2)} ميغابايت • جاهز للمعالجة والاستخراج الآلي
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedFile(null);
-                    setFileBase64(null);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
-                  title="إلغاء الملف"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setInputTab('paste')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              inputTab === 'paste'
+                ? 'bg-emerald-700 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5 text-emerald-300" />
+            <span>لصق نص الصك مباشرة (من ناجز)</span>
+          </button>
         </div>
+
+        {/* Tab 1: Drag & Drop Area */}
+        {inputTab === 'upload' && (
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={handleDrop}
+            className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center transition-all ${
+              dragActive
+                ? 'border-emerald-500 bg-emerald-950/20 scale-[0.99]'
+                : 'border-slate-700 hover:border-slate-600 bg-slate-950/60'
+            }`}
+          >
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+              accept=".pdf,application/pdf"
+              className="hidden"
+            />
+
+            {!selectedFile ? (
+              <div className="space-y-3">
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 flex items-center justify-center shadow-inner">
+                  <FileUp className="w-7 h-7" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-slate-200">
+                    اسحب وأفلت ملف صك الحكم (PDF) هنا، أو اضغط للاستعراض
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    يدعم ملفات PDF الصادرة عن المحاكم وبوابة ناجز والماسح الضوئي حتى 50 ميغابايت
+                  </p>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold border border-slate-700 shadow-sm transition-colors inline-flex items-center gap-2"
+                  >
+                    <FileText className="w-4 h-4 text-emerald-400" />
+                    <span>اختيار ملف صك الحكم من جهازك</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-right max-w-xl mx-auto">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-emerald-950 border border-emerald-800/50 text-emerald-400 flex items-center justify-center shrink-0">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-0.5 overflow-hidden">
+                    <p className="text-xs font-bold text-slate-100 truncate max-w-xs">
+                      {selectedFile.name}
+                    </p>
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      {(selectedFile.size / (1024 * 1024)).toFixed(2)} ميغابايت • جاهز للمعالجة والاستخراج الآلي
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setFileBase64(null);
+                      setExtractedText('');
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+                    title="إلغاء الملف"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Paste Deed Text Area */}
+        {inputTab === 'paste' && (
+          <div className="space-y-2">
+            <textarea
+              rows={8}
+              value={pastedText}
+              onChange={(e) => setPastedText(e.target.value)}
+              placeholder="انسخ والصق نص صك الحكم القضائي هنا (الديباجة، وقائع الدعوى، الأسباب والتسبيب، منطوق الحكم، مدد الاعتراض)..."
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed focus:outline-none focus:border-emerald-600 transition-colors"
+            />
+            <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+              <span>يمكنك نسخ نص الصك مباشرة من تبويب القضايا في بوابة ناجز ولصقه هنا</span>
+              <span>{pastedText.length} حرف</span>
+            </div>
+          </div>
+        )}
 
         {/* Progress Bar (Visible during processing) */}
         {(isLoading || progressPercent > 0) && (
@@ -305,7 +388,7 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
             </div>
 
             <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
-              <span>1. رفع ملف PDF ومسح OCR</span>
+              <span>1. فحص المستند وقراءة النصوص</span>
               <span>2. تحديد الدائرة والأطراف</span>
               <span>3. تفنيد التسبيب والمنطوق</span>
               <span>4. احتساب مهلة الاستئناف</span>
@@ -314,7 +397,7 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
         )}
 
         {/* Action Button */}
-        {selectedFile && !isLoading && (
+        {((selectedFile && inputTab === 'upload') || (pastedText.trim() && inputTab === 'paste')) && !isLoading && (
           <div className="flex justify-end pt-1">
             <button
               type="button"
